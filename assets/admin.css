@@ -1,0 +1,59 @@
+.wc-telegram-bot-admin {
+  max-width: 1200px;
+}
+
+.add-group-form {
+  background: #fff;
+  border: 1px solid #ccd0d4;
+  border-radius: 4px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.add-group-form h2 {
+  margin-top: 0;
+}
+
+.status-sent {
+  color: #46b450;
+  font-weight: bold;
+}
+
+.status-failed {
+  color: #dc3232;
+  font-weight: bold;
+}
+
+#connection-result {
+  margin-top: 10px;
+}
+
+#connection-result .notice {
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.form-table th {
+  width: 200px;
+}
+
+.large-text {
+  width: 100%;
+  max-width: 500px;
+}
+
+select[multiple] {
+  height: 120px;
+}
+
+.wp-list-table .column-message {
+  width: 40%;
+}
+
+.button.delete-group {
+  color: #a00;
+}
+
+.button.delete-group:hover {
+  color: #dc3232;
+}
