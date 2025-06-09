@@ -1,146 +1,141 @@
 <?php
 
-class WC_Telegram_Bot_Order_Handler {
+class WC_Telegram_Bot_API {
+    
+    private $bot_token;
     
     public function __construct() {
-        // Hook into WooCommerce order events
-        add_action('woocommerce_new_order', array($this, 'handle_new_order'));
-        add_action('woocommerce_order_status_changed', array($this, 'handle_order_status_change'), 10, 4);
-    }
-    
-    public function handle_new_order($order_id) {
-        $this->send_order_notification($order_id, 'new_order');
-    }
-    
-    public function handle_order_status_change($order_id, $old_status, $new_status, $order) {
-        // Only send notification for processing status
-        if ($new_status === 'processing') {
-            $this->send_order_notification($order_id, 'processing');
-        }
-    }
-    
-    private function send_order_notification($order_id, $trigger) {
-        $order = wc_get_order($order_id);
-        if (!$order) {
-            return;
-        }
-        
-        // Get all active groups
-        $groups = WC_Telegram_Bot_Database::get_groups();
-        if (empty($groups)) {
-            return;
-        }
-        
-        // Get order items
-        $items = $order->get_items();
-        
-        foreach ($items as $item) {
-            $product = $item->get_product();
-            if (!$product) {
-                continue;
-            }
-            
-            // Get product categories
-            $product_categories = wp_get_post_terms($product->get_id(), 'product_cat', array('fields' => 'ids'));
-            
-            // Find matching groups for this product
-            $matching_groups = $this->get_matching_groups($groups, $product_categories);
-            
-            foreach ($matching_groups as $group) {
-                $this->send_group_notification($group, $order, $item, $product);
-            }
-        }
-    }
-    
-    private function get_matching_groups($groups, $product_categories) {
-        $matching_groups = array();
-        
-        foreach ($groups as $group) {
-            $group_categories = maybe_unserialize($group->categories);
-            
-            // If no categories set for group, send to all
-            if (empty($group_categories)) {
-                $matching_groups[] = $group;
-                continue;
-            }
-            
-            // Check if product categories match group categories
-            if (array_intersect($product_categories, $group_categories)) {
-                $matching_groups[] = $group;
-            }
-        }
-        
-        return $matching_groups;
-    }
-    
-    private function send_group_notification($group, $order, $item, $product) {
-        // Get message template
-        $template = !empty($group->message_template) ? $group->message_template : $this->get_default_template();
-        
-        // Replace placeholders
-        $message = $this->replace_placeholders($template, $order, $item, $product);
-        
-        // Get product media
-        $media_url = $this->get_product_media($product);
-        
-        // Get button settings
         $settings = get_option('wc_telegram_bot_settings', array());
-        $button_text = isset($settings['button_text']) ? $settings['button_text'] : 'Shop Now';
-        $button_url = $product->get_permalink();
+        $this->bot_token = isset($settings['bot_token']) ? $settings['bot_token'] : '';
+    }
+    
+    public function send_message($chat_id, $message, $media_url = '', $button_text = '', $button_url = '') {
+        if (empty($this->bot_token)) {
+            return false;
+        }
         
-        // Send message
-        $telegram_api = new WC_Telegram_Bot_API();
-        $success = $telegram_api->send_message(
-            $group->chat_id,
-            $message,
-            $media_url,
-            $button_text,
-            $button_url
+        $api_url = "https://api.telegram.org/bot{$this->bot_token}/";
+        
+        // Prepare inline keyboard if button is provided
+        $reply_markup = '';
+        if (!empty($button_text) && !empty($button_url)) {
+            $keyboard = array(
+                'inline_keyboard' => array(
+                    array(
+                        array(
+                            'text' => $button_text,
+                            'url' => $button_url
+                        )
+                    )
+                )
+            );
+            $reply_markup = json_encode($keyboard);
+        }
+        
+        // Send media with caption if media URL is provided
+        if (!empty($media_url)) {
+            return $this->send_media_message($api_url, $chat_id, $message, $media_url, $reply_markup);
+        } else {
+            return $this->send_text_message($api_url, $chat_id, $message, $reply_markup);
+        }
+    }
+    
+    private function send_text_message($api_url, $chat_id, $message, $reply_markup = '') {
+        $data = array(
+            'chat_id' => $chat_id,
+            'text' => $message,
+            'parse_mode' => 'HTML'
         );
         
-        // Log the message
-        WC_Telegram_Bot_Database::log_message(
-            $order->get_id(),
-            $group->chat_id,
-            $message,
-            $success ? 'sent' : 'failed'
-        );
-    }
-    
-    private function replace_placeholders($template, $order, $item, $product) {
-        $placeholders = array(
-            '{product_name}' => $product->get_name(),
-            '{quantity}' => $item->get_quantity(),
-            '{order_total}' => $order->get_formatted_order_total(),
-            '{stock_quantity}' => $product->get_stock_quantity() ?: 'N/A',
-            '{order_status}' => $order->get_status(),
-            '{order_id}' => $order->get_id(),
-            '{customer_name}' => $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
-            '{product_price}' => wc_price($product->get_price()),
-            '{order_date}' => $order->get_date_created()->format('Y-m-d H:i:s')
-        );
-        
-        return str_replace(array_keys($placeholders), array_values($placeholders), $template);
-    }
-    
-    private function get_product_media($product) {
-        $settings = get_option('wc_telegram_bot_settings', array());
-        if (!isset($settings['enable_media']) || !$settings['enable_media']) {
-            return '';
+        if (!empty($reply_markup)) {
+            $data['reply_markup'] = $reply_markup;
         }
         
-        // Get product featured image
-        $image_id = $product->get_image_id();
-        if ($image_id) {
-            return wp_get_attachment_url($image_id);
-        }
-        
-        return '';
+        return $this->make_request($api_url . 'sendMessage', $data);
     }
     
-    private function get_default_template() {
-        $settings = get_option('wc_telegram_bot_settings', array());
-        return isset($settings['default_message_template']) ? $settings['default_message_template'] : 
-            "⚡⚡ New Order Received ⚡⚡\n\n📦 Product Name: {product_name}\n🔢 Product Quantity: {quantity}\n💰 Order Value: {order_total}\n📊 Stock Quantity: {stock_quantity}\n📋 Status: {order_status}";
+    private function send_media_message($api_url, $chat_id, $caption, $media_url, $reply_markup = '') {
+        // Determine media type
+        $media_type = $this->get_media_type($media_url);
+        
+        $data = array(
+            'chat_id' => $chat_id,
+            'caption' => $caption,
+            'parse_mode' => 'HTML'
+        );
+        
+        if (!empty($reply_markup)) {
+            $data['reply_markup'] = $reply_markup;
+        }
+        
+        // Send appropriate media type
+        switch ($media_type) {
+            case 'video':
+                $data['video'] = $media_url;
+                $endpoint = 'sendVideo';
+                break;
+            case 'animation':
+                $data['animation'] = $media_url;
+                $endpoint = 'sendAnimation';
+                break;
+            case 'photo':
+            default:
+                $data['photo'] = $media_url;
+                $endpoint = 'sendPhoto';
+                break;
+        }
+        
+        return $this->make_request($api_url . $endpoint, $data);
+    }
+    
+    private function get_media_type($url) {
+        $extension = strtolower(pathinfo($url, PATHINFO_EXTENSION));
+        
+        if (in_array($extension, array('mp4', 'avi', 'mov'))) {
+            return 'video';
+        } elseif (in_array($extension, array('gif'))) {
+            return 'animation';
+        } else {
+            return 'photo';
+        }
+    }
+    
+    private function make_request($url, $data) {
+        $response = wp_remote_post($url, array(
+            'body' => $data,
+            'timeout' => 30
+        ));
+        
+        if (is_wp_error($response)) {
+            error_log('Telegram API Error: ' . $response->get_error_message());
+            return false;
+        }
+        
+        $body = wp_remote_retrieve_body($response);
+        $result = json_decode($body, true);
+        
+        return isset($result['ok']) && $result['ok'];
+    }
+    
+    public function test_connection() {
+        if (empty($this->bot_token)) {
+            return array('success' => false, 'message' => 'Bot token is required');
+        }
+        
+        $api_url = "https://api.telegram.org/bot{$this->bot_token}/getMe";
+        $response = wp_remote_get($api_url);
+        
+        if (is_wp_error($response)) {
+            return array('success' => false, 'message' => $response->get_error_message());
+        }
+        
+        $body = wp_remote_retrieve_body($response);
+        $result = json_decode($body, true);
+        
+        if (isset($result['ok']) && $result['ok']) {
+            return array('success' => true, 'message' => 'Bot connected successfully!', 'bot_info' => $result['result']);
+        } else {
+            return array('success' => false, 'message' => 'Invalid bot token');
+        }
     }
 }
